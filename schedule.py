@@ -14,7 +14,11 @@ VALID_GROUPS = ("core", "assets")
 
 def _as_utc(value: datetime | None = None) -> datetime:
     current = value or datetime.now(UTC)
-    return current.replace(tzinfo=UTC) if current.tzinfo is None else current.astimezone(UTC)
+    return (
+        current.replace(tzinfo=UTC)
+        if current.tzinfo is None
+        else current.astimezone(UTC)
+    )
 
 
 def _parse_time(value: object) -> datetime | None:
@@ -38,9 +42,12 @@ class ScheduleState:
     last_run_at: str | None = None
     next_run_at: str | None = None
     last_error: str | None = None
+    last_warning: str | None = None
 
     @classmethod
-    def from_config(cls, value: object, *, now: datetime | None = None) -> ScheduleState:
+    def from_config(
+        cls, value: object, *, now: datetime | None = None
+    ) -> ScheduleState:
         raw = value if isinstance(value, dict) else {}
         enabled = raw.get("enabled") is True
         interval = raw.get("interval_days")
@@ -52,7 +59,13 @@ class ScheduleState:
             interval = DEFAULT_INTERVAL_DAYS
         raw_groups = raw.get("groups")
         groups = (
-            tuple(dict.fromkeys(group for group in raw_groups if isinstance(group, str) and group in VALID_GROUPS))
+            tuple(
+                dict.fromkeys(
+                    group
+                    for group in raw_groups
+                    if isinstance(group, str) and group in VALID_GROUPS
+                )
+            )
             if isinstance(raw_groups, list)
             else ()
         )
@@ -62,6 +75,9 @@ class ScheduleState:
         error = raw.get("last_error")
         if not isinstance(error, str) or not error:
             error = None
+        warning = raw.get("last_warning")
+        if not isinstance(warning, str) or not warning:
+            warning = None
         if enabled and next_run is None:
             next_run = _as_utc(now) + timedelta(days=interval)
         return cls(
@@ -71,6 +87,7 @@ class ScheduleState:
             last_run_at=_time_text(last_run) if last_run else None,
             next_run_at=_time_text(next_run) if next_run else None,
             last_error=error,
+            last_warning=warning,
         )
 
     def reconfigured(
@@ -103,7 +120,9 @@ class ScheduleState:
         next_run = _parse_time(self.next_run_at)
         return self.enabled and next_run is not None and _as_utc(now) >= next_run
 
-    def succeeded(self, *, now: datetime | None = None) -> ScheduleState:
+    def succeeded(
+        self, *, now: datetime | None = None, warning: str | None = None
+    ) -> ScheduleState:
         completed = _as_utc(now)
         return ScheduleState(
             enabled=self.enabled,
@@ -111,6 +130,7 @@ class ScheduleState:
             groups=self.groups,
             last_run_at=_time_text(completed),
             next_run_at=_time_text(completed + timedelta(days=self.interval_days)),
+            last_warning=warning[:500] if warning else None,
         )
 
     def failed(self, error: str, *, now: datetime | None = None) -> ScheduleState:
@@ -132,6 +152,7 @@ class ScheduleState:
             "last_run_at": self.last_run_at,
             "next_run_at": self.next_run_at,
             "last_error": self.last_error,
+            "last_warning": self.last_warning,
         }
         if running is not None:
             result["running"] = running
