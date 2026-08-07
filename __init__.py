@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from pathlib import Path
 
 from plugin.sdk.plugin import (
     Err,
@@ -30,7 +31,13 @@ class DataBackupPlugin(NekoPluginBase):
     async def startup(self, **_):
         plugin_data = self.data_path().resolve(strict=False)
         data_root = plugin_data.parents[2]
-        self._engine = BackupEngine(data_root, plugin_data / "snapshots")
+        default_backup_root = plugin_data / "snapshots"
+        configured = await self.config.get_str("backup.directory", default="", timeout=5.0)
+        try:
+            backup_root = self._resolve_backup_root(configured, default_backup_root)
+            self._engine = BackupEngine(data_root, backup_root)
+        except (BackupError, OSError, ValueError):
+            self._engine = BackupEngine(data_root, default_backup_root)
         self.register_static_ui("static", cache_control="no-store")
         self.set_list_actions(
             [
@@ -43,7 +50,7 @@ class DataBackupPlugin(NekoPluginBase):
                 }
             ]
         )
-        return Ok(self._engine.status())
+        return Ok(self._status())
 
     @lifecycle(id="shutdown")
     async def shutdown(self, **_):
@@ -55,6 +62,21 @@ class DataBackupPlugin(NekoPluginBase):
             raise BackupError("backup plugin is not started")
         return self._engine
 
+    def _status(self) -> dict:
+        status = self._backup().status()
+        status["default_backup_root"] = str(self.data_path("snapshots").resolve(strict=False))
+        return status
+
+    @staticmethod
+    def _resolve_backup_root(value: str | None, default: Path) -> Path:
+        raw = str(value or "").strip()
+        if not raw:
+            return default
+        path = Path(raw).expanduser()
+        if not path.is_absolute():
+            raise BackupError("backup directory must be an absolute path")
+        return path
+
     @plugin_entry(
         id="backup_status",
         name="查看备份状态",
@@ -63,8 +85,35 @@ class DataBackupPlugin(NekoPluginBase):
     )
     async def backup_status(self, **_):
         try:
-            return Ok(await asyncio.to_thread(self._backup().status))
+            return Ok(await asyncio.to_thread(self._status))
         except BackupError as exc:
+            return Err(SdkError(str(exc)))
+
+    @plugin_entry(
+        id="backup_set_directory",
+        name="更改备份目录",
+        description="设置绝对备份目录；传入空字符串恢复默认目录。",
+        input_schema={
+            "type": "object",
+            "properties": {"directory": {"type": "string"}},
+            "required": ["directory"],
+            "additionalProperties": False,
+        },
+        timeout=30.0,
+    )
+    async def backup_set_directory(self, directory: str, **_):
+        default = self.data_path("snapshots").resolve(strict=False)
+        try:
+            backup_root = self._resolve_backup_root(directory, default)
+            engine = await asyncio.to_thread(BackupEngine, self._backup().data_root, backup_root)
+            await self.config.set(
+                "backup.directory",
+                "" if not directory.strip() else str(engine.backup_root),
+                timeout=5.0,
+            )
+            self._engine = engine
+            return Ok(self._status())
+        except (BackupError, OSError, ValueError) as exc:
             return Err(SdkError(str(exc)))
 
     @plugin_entry(
@@ -101,15 +150,11 @@ class DataBackupPlugin(NekoPluginBase):
         },
         timeout=900.0,
     )
-    async def backup_restore(
-        self, group: str, snapshot_id: str, confirmation: str, **_
-    ):
+    async def backup_restore(self, group: str, snapshot_id: str, confirmation: str, **_):
         if confirmation != snapshot_id:
             return Err(SdkError("confirmation must match the snapshot id"))
         try:
-            result = await asyncio.to_thread(
-                self._backup().restore_snapshot, group, snapshot_id
-            )
+            result = await asyncio.to_thread(self._backup().restore_snapshot, group, snapshot_id)
             return Ok(result)
         except (BackupError, OSError) as exc:
             return Err(SdkError(str(exc)))
@@ -134,11 +179,7 @@ class DataBackupPlugin(NekoPluginBase):
         if confirmation != snapshot_id:
             return Err(SdkError("confirmation must match the snapshot id"))
         try:
-            return Ok(
-                await asyncio.to_thread(
-                    self._backup().delete_snapshot, group, snapshot_id
-                )
-            )
+            return Ok(await asyncio.to_thread(self._backup().delete_snapshot, group, snapshot_id))
         except (BackupError, OSError) as exc:
             return Err(SdkError(str(exc)))
 

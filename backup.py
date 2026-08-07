@@ -37,11 +37,14 @@ class BackupEngine:
 
         if self.backup_root == self.data_root:
             raise BackupError("backup directory cannot be the data root")
+        for paths in BACKUP_GROUPS.values():
+            for relative in paths:
+                source_root = (self.data_root / relative).resolve(strict=False)
+                if self.backup_root == source_root or source_root in self.backup_root.parents:
+                    raise BackupError("backup directory cannot be inside a backed-up data directory")
         self.backup_root.mkdir(parents=True, exist_ok=True)
 
-    def create_snapshot(
-        self, group: str, *, protected: Iterable[str] = ()
-    ) -> dict[str, Any]:
+    def create_snapshot(self, group: str, *, protected: Iterable[str] = ()) -> dict[str, Any]:
         with self._lock:
             paths = self._group_paths(group)
             present_paths = [path for path in paths if (self.data_root / path).exists()]
@@ -55,9 +58,7 @@ class BackupEngine:
             files_root = stage / "files"
             previous = self._latest_manifest(group)
             previous_files = previous.get("files", {}) if previous else {}
-            previous_root = (
-                Path(previous["_snapshot_path"]) / "files" if previous else None
-            )
+            previous_root = Path(previous["_snapshot_path"]) / "files" if previous else None
             manifest_files: dict[str, dict[str, Any]] = {}
             total_bytes = 0
 
@@ -67,9 +68,7 @@ class BackupEngine:
                 for relative_root in present_paths:
                     source_root = self._safe_source(relative_root)
                     if source_root.is_symlink():
-                        raise BackupError(
-                            f"symbolic-link backup roots are not allowed: {relative_root}"
-                        )
+                        raise BackupError(f"symbolic-link backup roots are not allowed: {relative_root}")
                     for source in self._iter_files(source_root):
                         relative = source.relative_to(self.data_root)
                         key = relative.as_posix()
@@ -77,9 +76,7 @@ class BackupEngine:
                         target.parent.mkdir(parents=True, exist_ok=True)
 
                         previous_meta = previous_files.get(key)
-                        previous_file = (
-                            previous_root / relative if previous_root else None
-                        )
+                        previous_file = previous_root / relative if previous_root else None
                         digest, size = self._copy_snapshot_file(
                             source,
                             target,
@@ -130,10 +127,7 @@ class BackupEngine:
             paths = self._group_paths(group)
             snapshot = self._snapshot_path(group, snapshot_id)
             manifest = self._load_manifest(snapshot)
-            if (
-                manifest.get("group") != group
-                or tuple(manifest.get("paths", ())) != paths
-            ):
+            if manifest.get("group") != group or tuple(manifest.get("paths", ())) != paths:
                 raise BackupError("snapshot group metadata does not match")
             self._verify_snapshot(snapshot, manifest)
 
@@ -260,9 +254,7 @@ class BackupEngine:
             digest = self._sha256(target)
         return digest, target.stat().st_size
 
-    def _can_link_previous(
-        self, previous_file: Path | None, previous_meta: Any, digest: str
-    ) -> bool:
+    def _can_link_previous(self, previous_file: Path | None, previous_meta: Any, digest: str) -> bool:
         return bool(
             isinstance(previous_meta, dict)
             and previous_meta.get("sha256") == digest
@@ -284,18 +276,14 @@ class BackupEngine:
     def _is_sqlite_sidecar(cls, path: Path) -> bool:
         for suffix in ("-wal", "-shm"):
             if path.name.endswith(suffix):
-                return cls._is_sqlite_database(
-                    path.with_name(path.name[: -len(suffix)])
-                )
+                return cls._is_sqlite_database(path.with_name(path.name[: -len(suffix)]))
         return False
 
     @staticmethod
     def _backup_sqlite(source: Path, target: Path) -> None:
         source_uri = f"{source.resolve(strict=True).as_uri()}?mode=ro"
         try:
-            with closing(
-                sqlite3.connect(source_uri, uri=True, timeout=10)
-            ) as source_db:
+            with closing(sqlite3.connect(source_uri, uri=True, timeout=10)) as source_db:
                 with closing(sqlite3.connect(target, timeout=10)) as target_db:
                     source_db.backup(target_db)
         except sqlite3.Error as exc:
@@ -324,9 +312,7 @@ class BackupEngine:
         return [
             path
             for path in group_root.iterdir()
-            if path.is_dir()
-            and not path.is_symlink()
-            and _SNAPSHOT_ID_RE.fullmatch(path.name)
+            if path.is_dir() and not path.is_symlink() and _SNAPSHOT_ID_RE.fullmatch(path.name)
         ]
 
     def _snapshot_path(self, group: str, snapshot_id: str) -> Path:
@@ -339,9 +325,7 @@ class BackupEngine:
         if snapshot.is_symlink():
             raise BackupError(f"unsafe snapshot path: {snapshot.name}")
         try:
-            payload = json.loads(
-                (snapshot / "manifest.json").read_text(encoding="utf-8")
-            )
+            payload = json.loads((snapshot / "manifest.json").read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError) as exc:
             raise BackupError(f"invalid snapshot manifest: {snapshot.name}") from exc
         if not isinstance(payload, dict) or payload.get("id") != snapshot.name:
@@ -365,9 +349,7 @@ class BackupEngine:
         files_root = (snapshot / "files").resolve(strict=False)
         actual_files: set[str] = set()
         if files_root.exists():
-            for directory, dirnames, filenames in os.walk(
-                files_root, followlinks=False
-            ):
+            for directory, dirnames, filenames in os.walk(files_root, followlinks=False):
                 base = Path(directory)
                 if any((base / name).is_symlink() for name in dirnames):
                     raise BackupError("snapshot contains a symbolic link")
@@ -382,11 +364,7 @@ class BackupEngine:
             if not isinstance(relative, str) or not isinstance(metadata, dict):
                 raise BackupError("snapshot file manifest is invalid")
             source = (snapshot / "files" / Path(relative)).resolve(strict=False)
-            if (
-                files_root not in source.parents
-                or not source.is_file()
-                or source.is_symlink()
-            ):
+            if files_root not in source.parents or not source.is_file() or source.is_symlink():
                 raise BackupError(f"snapshot file is missing or unsafe: {relative}")
             if self._sha256(source) != metadata.get("sha256"):
                 raise BackupError(f"snapshot checksum mismatch: {relative}")
@@ -411,8 +389,4 @@ class BackupEngine:
 
     @staticmethod
     def _public_manifest(manifest: dict[str, Any]) -> dict[str, Any]:
-        return {
-            key: value
-            for key, value in manifest.items()
-            if key not in {"files", "_snapshot_path"}
-        }
+        return {key: value for key, value in manifest.items() if key not in {"files", "_snapshot_path"}}

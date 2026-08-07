@@ -57,9 +57,15 @@ def test_snapshot_retention_keeps_latest(tmp_path: Path) -> None:
         source.write_text(value, encoding="utf-8")
         created.append(engine.create_snapshot("core")["id"])
 
-    assert [item["id"] for item in engine.list_snapshots("core")] == list(
-        reversed(created[-3:])
-    )
+    assert [item["id"] for item in engine.list_snapshots("core")] == list(reversed(created[-3:]))
+
+
+def test_rejects_backup_directory_inside_backed_up_data(tmp_path: Path) -> None:
+    data_root = tmp_path / "data"
+    data_root.mkdir()
+
+    with pytest.raises(BackupError, match="inside a backed-up data directory"):
+        BackupEngine(data_root, data_root / "memory" / "snapshots")
 
 
 def test_restore_safety_snapshot_counts_toward_retention(tmp_path: Path) -> None:
@@ -87,12 +93,8 @@ def test_unchanged_files_are_hard_linked_when_supported(tmp_path: Path) -> None:
     source.write_text("same", encoding="utf-8")
     first = engine.create_snapshot("core")
     second = engine.create_snapshot("core")
-    first_file = (
-        engine.backup_root / "core" / first["id"] / "files" / "config" / "same.txt"
-    )
-    second_file = (
-        engine.backup_root / "core" / second["id"] / "files" / "config" / "same.txt"
-    )
+    first_file = engine.backup_root / "core" / first["id"] / "files" / "config" / "same.txt"
+    second_file = engine.backup_root / "core" / second["id"] / "files" / "config" / "same.txt"
 
     if os.stat(first_file).st_ino == 0:
         pytest.skip("filesystem does not expose inode identifiers")
@@ -114,9 +116,7 @@ def test_restore_rejects_tampered_snapshot(tmp_path: Path) -> None:
     source.parent.mkdir(parents=True)
     source.write_text("original", encoding="utf-8")
     snapshot = engine.create_snapshot("core")
-    archived = (
-        engine.backup_root / "core" / snapshot["id"] / "files" / "config" / "value.txt"
-    )
+    archived = engine.backup_root / "core" / snapshot["id"] / "files" / "config" / "value.txt"
     archived.write_text("tampered", encoding="utf-8")
 
     with pytest.raises(BackupError, match="checksum mismatch"):
@@ -130,9 +130,7 @@ def test_restore_rejects_unlisted_snapshot_file(tmp_path: Path) -> None:
     source.parent.mkdir(parents=True)
     source.write_text("original", encoding="utf-8")
     snapshot = engine.create_snapshot("core")
-    injected = (
-        engine.backup_root / "core" / snapshot["id"] / "files" / "config" / "extra.txt"
-    )
+    injected = engine.backup_root / "core" / snapshot["id"] / "files" / "config" / "extra.txt"
     injected.write_text("unexpected", encoding="utf-8")
 
     with pytest.raises(BackupError, match="do not match"):
@@ -145,15 +143,11 @@ def test_new_snapshot_does_not_link_tampered_previous_file(tmp_path: Path) -> No
     source.parent.mkdir(parents=True)
     source.write_text("original", encoding="utf-8")
     first = engine.create_snapshot("core")
-    first_file = (
-        engine.backup_root / "core" / first["id"] / "files" / "config" / "value.txt"
-    )
+    first_file = engine.backup_root / "core" / first["id"] / "files" / "config" / "value.txt"
     first_file.write_text("tampered", encoding="utf-8")
 
     second = engine.create_snapshot("core")
-    second_file = (
-        engine.backup_root / "core" / second["id"] / "files" / "config" / "value.txt"
-    )
+    second_file = engine.backup_root / "core" / second["id"] / "files" / "config" / "value.txt"
 
     assert second_file.read_text(encoding="utf-8") == "original"
     assert not os.path.samefile(first_file, second_file)
@@ -172,17 +166,7 @@ def test_sqlite_snapshot_includes_uncheckpointed_wal_data(tmp_path: Path) -> Non
         connection.commit()
         snapshot = engine.create_snapshot("core")
 
-    archived = (
-        engine.backup_root
-        / "core"
-        / snapshot["id"]
-        / "files"
-        / "memory"
-        / "cat"
-        / "time_indexed.db"
-    )
+    archived = engine.backup_root / "core" / snapshot["id"] / "files" / "memory" / "cat" / "time_indexed.db"
     assert not archived.with_name("time_indexed.db-wal").exists()
     with sqlite3.connect(archived) as connection:
-        assert connection.execute("SELECT value FROM facts").fetchone() == (
-            "remember me",
-        )
+        assert connection.execute("SELECT value FROM facts").fetchone() == ("remember me",)
