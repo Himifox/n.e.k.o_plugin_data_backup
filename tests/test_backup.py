@@ -2,11 +2,14 @@ from __future__ import annotations
 
 import os
 import sqlite3
+from importlib import import_module
 from pathlib import Path
 
 import pytest
 
-from backup import BackupEngine, BackupError
+_backup = import_module("backup")
+BackupEngine = _backup.BackupEngine
+BackupError = _backup.BackupError
 
 
 def _engine(tmp_path: Path, *, retention: int = 10) -> BackupEngine:

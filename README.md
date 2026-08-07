@@ -31,4 +31,4 @@ uv run --group dev ruff check .
 uv run python -m plugin.neko_plugin_cli.cli check -r data_backup
 ```
 
-推送与 `plugin.toml` 版本一致的标签（例如 `v0.1.0`）后，发布工作流会生成 `data_backup.neko-plugin` Release 附件。
+推送与 `plugin.toml` 版本一致的标签（例如 `v0.1.1`）后，发布工作流会生成 `data_backup.neko-plugin` Release 附件。
